@@ -1,247 +1,154 @@
 -- ============= CONFIGURATION =============
 local WEBHOOK_URL = "https://discord.com/api/webhooks/1420551166281912320/dDOHWaQ-t37ibHi-FI0i5_K2JaKVCnfx-r8WRNQ80bem7yQHinWl0rmJiYuWpa-FZPZY"
-local CHECK_INTERVAL = 0.5 -- How often to check (seconds)
+local CHECK_INTERVAL = 0.5
 local KEYWORDS = {"Voided", "Glitched", "Prismatic"}
-local NOTIFY_SOUND = true -- Play sound on detection
-local SHOW_GUI_NOTIFICATION = true -- Show in-game notification
+local ALLOWED_PRISMATIC_RARITIES = {
+    Legendary = true,
+    Mythic = true,
+    Exotic = true,
+    Secret = true
+}
+local SECRET_PING = "@everyone 🔔 SECRET ITEM SPAWNED"
 -- =========================================
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
 local LocalPlayer = Players.LocalPlayer
+local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 
 local notifiedItems = {}
 local running = true
 
--- HTTP request function (works with most executors)
-local function sendWebhook(itemName)
+-- ================= WEBHOOK =================
+local function sendWebhook(itemName, rarity)
+    local content = "@everyone"
+    if rarity == "Secret" then
+        content = SECRET_PING
+    end
+
     local data = {
-        ["content"] = "@everyone",
-        ["embeds"] = {{
-            ["title"] = "🎉 Rare Item Spawned!",
-            ["description"] = "**" .. itemName .. "** has spawned in the game!",
-            ["color"] = 15844367, -- Gold color
-            ["timestamp"] = os.date("!%Y-%m-%dT%H:%M:%S"),
-            ["footer"] = {
-                ["text"] = "Item Monitor by " .. LocalPlayer.Name
-            }
+        content = content,
+        embeds = {{
+            title = "🎉 Rare Item Spawned!",
+            description = "**" .. itemName .. "**\nRarity: **" .. rarity .. "**",
+            color = rarity == "Secret" and 16711680 or 15844367,
+            timestamp = os.date("!%Y-%m-%dT%H:%M:%S")
         }}
     }
-    
-    local success, response = pcall(function()
-        return request({
+
+    pcall(function()
+        request({
             Url = WEBHOOK_URL,
             Method = "POST",
-            Headers = {
-                ["Content-Type"] = "application/json"
-            },
+            Headers = {["Content-Type"] = "application/json"},
             Body = HttpService:JSONEncode(data)
         })
     end)
-    
-    if success then
-        print("[✅] Webhook sent for: " .. itemName)
-    else
-        warn("[❌] Failed to send webhook: " .. tostring(response))
-    end
 end
 
--- In-game notification GUI
-local function showNotification(itemName)
-    if not SHOW_GUI_NOTIFICATION then return end
-    
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "ItemNotification"
-    screenGui.ResetOnSpawn = false
-    screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-    
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0, 350, 0, 100)
-    frame.Position = UDim2.new(1, -370, 0, 20)
-    frame.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
-    frame.BorderSizePixel = 0
-    frame.Parent = screenGui
-    
-    local corner = Instance.new("UICorner")
-    corner.CornerRadius = UDim.new(0, 10)
-    corner.Parent = frame
-    
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, -20, 0, 30)
-    title.Position = UDim2.new(0, 10, 0, 10)
-    title.BackgroundTransparency = 1
-    title.Text = "🎉 RARE ITEM SPAWNED!"
-    title.TextColor3 = Color3.fromRGB(255, 215, 0)
-    title.TextSize = 18
-    title.Font = Enum.Font.GothamBold
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Parent = frame
-    
-    local itemLabel = Instance.new("TextLabel")
-    itemLabel.Size = UDim2.new(1, -20, 0, 40)
-    itemLabel.Position = UDim2.new(0, 10, 0, 45)
-    itemLabel.BackgroundTransparency = 1
-    itemLabel.Text = itemName
-    itemLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    itemLabel.TextSize = 16
-    itemLabel.Font = Enum.Font.Gotham
-    itemLabel.TextWrapped = true
-    itemLabel.TextXAlignment = Enum.TextXAlignment.Left
-    itemLabel.Parent = frame
-    
-    -- Slide in animation
-    frame:TweenPosition(
-        UDim2.new(1, -370, 0, 20),
-        Enum.EasingDirection.Out,
-        Enum.EasingStyle.Back,
-        0.5,
-        true
-    )
-    
-    -- Auto-remove after 5 seconds
-    task.delay(5, function()
-        frame:TweenPosition(
-            UDim2.new(1, 20, 0, 20),
-            Enum.EasingDirection.In,
-            Enum.EasingStyle.Back,
-            0.5,
-            true,
-            function()
-                screenGui:Destroy()
-            end
-        )
-    end)
+-- ================= UTIL =================
+local function tweenTo(cf, time)
+    TweenService:Create(
+        HumanoidRootPart,
+        TweenInfo.new(time, Enum.EasingStyle.Linear),
+        {CFrame = cf}
+    ):Play()
 end
 
--- Play notification sound
-local function playNotificationSound()
-    if not NOTIFY_SOUND then return end
-    
-    local sound = Instance.new("Sound")
-    sound.SoundId = "rbxassetid://6026984224" -- Nice notification sound
-    sound.Volume = 0.5
-    sound.Parent = game:GetService("SoundService")
-    sound:Play()
-    
-    sound.Ended:Connect(function()
-        sound:Destroy()
-    end)
+local function buyPrompt(prompt)
+    if not prompt then return end
+    fireproximityprompt(prompt, 0.38)
 end
 
--- Check if item name contains keywords
-local function checkItemName(displayName)
+local function returnToPlot()
+    local plots = workspace:FindFirstChild("PlotSpots")
+    if not plots then return end
+
+    local playerPlot = plots:FindFirstChild(LocalPlayer.Name)
+    if not playerPlot then return end
+
+    local spot = playerPlot:FindFirstChild("Spot")
+    if not spot then return end
+
+    tweenTo(spot.CFrame + Vector3.new(0,3,0), 1)
+end
+
+-- ================= SCAN =================
+local function isRare(displayName, rarity)
     for _, keyword in ipairs(KEYWORDS) do
         if string.find(displayName, keyword) then
+            if keyword == "Prismatic" then
+                return ALLOWED_PRISMATIC_RARITIES[rarity] == true
+            end
             return true
         end
     end
     return false
 end
 
--- Scan a single item model
 local function scanItem(itemModel)
-    local success, result = pcall(function()
-        -- Navigate to ConveyorUi BillboardGui
-        local conveyorUi = itemModel:FindFirstChild("ConveyorUi")
-        if not conveyorUi or not conveyorUi:IsA("BillboardGui") then
-            return
-        end
-        
-        -- Find DisplayName TextLabel
-        local displayNameLabel = conveyorUi:FindFirstChild("DisplayName")
-        if not displayNameLabel or not displayNameLabel:IsA("TextLabel") then
-            return
-        end
-        
-        local itemName = displayNameLabel.Text
-        
-        -- Check if it's a rare item and hasn't been notified yet
-        if checkItemName(itemName) and not notifiedItems[itemName] then
-            notifiedItems[itemName] = true
-            
-            print("[🎉] RARE ITEM DETECTED: " .. itemName)
-            
-            sendWebhook(itemName)
-            showNotification(itemName)
-            playNotificationSound()
-        end
-    end)
-    
-    if not success then
-        -- Silently handle errors (item might be removed mid-scan)
+    local ui = itemModel:FindFirstChild("ConveyorUi")
+    if not ui then return end
+
+    local nameLabel = ui:FindFirstChild("DisplayName")
+    local rarityLabel = ui:FindFirstChild("RarityName")
+    if not nameLabel or not rarityLabel then return end
+
+    local itemName = nameLabel.Text
+    local rarity = rarityLabel.Text
+
+    if notifiedItems[itemName] then return end
+    if not isRare(itemName, rarity) then return end
+
+    notifiedItems[itemName] = true
+    sendWebhook(itemName, rarity)
+
+    -- Teleport to item
+    if itemModel.PrimaryPart then
+        tweenTo(itemModel.PrimaryPart.CFrame + Vector3.new(0,3,0), 0.6)
     end
+
+    task.wait(0.1)
+
+    -- Buy prompt
+    local prompt = itemModel:FindFirstChildWhichIsA("ProximityPrompt", true)
+    buyPrompt(prompt)
+
+    -- Return to plot
+    task.wait(0.5)
+    returnToPlot()
 end
 
--- Main scanning loop
+-- ================= MONITOR =================
 local function startMonitoring()
-    print("[🔍] Item monitor started!")
-    print("[📋] Tracking keywords: " .. table.concat(KEYWORDS, ", "))
-    
     while running do
-        local success, err = pcall(function()
-            local conveyorFolder = game.Workspace:FindFirstChild("Conveyor")
-            if not conveyorFolder then
-                warn("[⚠️] Conveyor folder not found in Workspace")
-                return
-            end
-            
-            local itemsFolder = conveyorFolder:FindFirstChild("Items")
-            if not itemsFolder then
-                warn("[⚠️] Items folder not found in Conveyor")
-                return
-            end
-            
-            -- Scan all items in the folder
-            for _, item in ipairs(itemsFolder:GetChildren()) do
+        local conveyor = workspace:FindFirstChild("Conveyor")
+        local items = conveyor and conveyor:FindFirstChild("Items")
+        if items then
+            for _, item in ipairs(items:GetChildren()) do
                 if item:IsA("Model") then
                     scanItem(item)
                 end
             end
-        end)
-        
-        if not success then
-            warn("[❌] Monitoring error: " .. tostring(err))
         end
-        
         task.wait(CHECK_INTERVAL)
     end
 end
 
--- Stop function
-local function stopMonitoring()
-    running = false
-    print("[🛑] Item monitor stopped!")
-end
-
--- Handle new items being added
-local function setupItemAddedListener()
-    local success = pcall(function()
-        local itemsFolder = game.Workspace.Conveyor.Items
-        
-        itemsFolder.ChildAdded:Connect(function(item)
-            if item:IsA("Model") then
-                task.wait(0.1) -- Small delay to ensure UI elements load
-                scanItem(item)
-            end
-        end)
+-- Real-time listener
+pcall(function()
+    workspace.Conveyor.Items.ChildAdded:Connect(function(item)
+        task.wait(0.1)
+        if item:IsA("Model") then
+            scanItem(item)
+        end
     end)
-    
-    if success then
-        print("[✅] Real-time monitoring enabled")
-    else
-        warn("[⚠️] Could not setup real-time monitoring, using polling only")
-    end
-end
+end)
 
--- Initialize
-setupItemAddedListener()
 task.spawn(startMonitoring)
 
--- Return control functions
 return {
-    stop = stopMonitoring,
-    restart = function()
-        running = true
-        task.spawn(startMonitoring)
-    end
+    stop = function() running = false end
 }
